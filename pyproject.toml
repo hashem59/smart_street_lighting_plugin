@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-street-lighting-plugin"
+version = "0.1.0"
+description = "Plumbing for an AS/NZS 1158-compliant smart street lighting design system: deterministic calculation engine, OSM resolver, geometry helpers, and RAG infrastructure backed by LM Studio."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Hashem Ramadan" },
+]
+keywords = [
+    "street-lighting",
+    "AS/NZS 1158",
+    "RAG",
+    "LlamaIndex",
+    "ChromaDB",
+    "LM Studio",
+    "OpenStreetMap",
+    "lighting design",
+    "capstone",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+rag = [
+    "llama-index>=0.12",
+    "llama-index-vector-stores-chroma>=0.4",
+    "chromadb>=0.5",
+]
+notebook = [
+    "matplotlib>=3.7",
+    "folium>=0.15",
+    "pandas>=2.0",
+]
+all = [
+    "llama-index>=0.12",
+    "llama-index-vector-stores-chroma>=0.4",
+    "chromadb>=0.5",
+    "matplotlib>=3.7",
+    "folium>=0.15",
+    "pandas>=2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/hashem59/smart_street_lighting_plugin"
+Repository = "https://github.com/hashem59/smart_street_lighting_plugin"
+Issues = "https://github.com/hashem59/smart_street_lighting_plugin/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+smart_street_lighting = ["py.typed"]

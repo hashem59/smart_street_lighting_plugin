@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+env/
+.env
+.env.local
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Notebook / data
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Runtime data (cache dirs created by callers)
+data/cache/
+*.chroma/
+chroma_db/
