@@ -30,11 +30,21 @@ NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 DEFAULT_USER_AGENT = "smart-street-lighting-plugin/0.1 (https://github.com/hashem59/smart_street_lighting_plugin)"
 
 
-def _query_overpass(query: str, timeout: int = 60) -> dict:
-    """POST an Overpass-QL query and return the parsed JSON response."""
+def _query_overpass(
+    query: str,
+    timeout: int = 60,
+    user_agent: str = DEFAULT_USER_AGENT,
+) -> dict:
+    """
+    POST an Overpass-QL query and return the parsed JSON response.
+
+    The Overpass server returns 406 Not Acceptable when the request
+    lacks a User-Agent header, so we always send one.
+    """
     resp = requests.post(
         OVERPASS_URL,
         data={"data": query},
+        headers={"User-Agent": user_agent},
         timeout=(15, timeout + 15),
     )
     resp.raise_for_status()
