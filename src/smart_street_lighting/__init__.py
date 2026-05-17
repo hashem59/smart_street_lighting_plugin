@@ -21,7 +21,7 @@ notebook can import only what it needs:
 The notebook is the deliverable; this library is the plumbing.
 """
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 from smart_street_lighting.engine import (
     P_CATEGORIES,
