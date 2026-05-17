@@ -1,17 +1,37 @@
 """
-Deterministic lighting calculation engine.
+Deterministic AS/NZS 1158 lighting calculation engine.
 
 All numbers in the system come from this module. The downstream LLM
 report only narrates these values; it never invents them.
 
 References
 ----------
-* AS/NZS 1158.3.1:2020 -- Pedestrian area (Category P) lighting.
-* National Greenhouse Accounts factors (DCCEEW, latest published year)
-  for Victorian Scope 2 + 3 emissions intensity.
+* **AS/NZS 1158.3.1:2020** -- *Lighting for roads and public spaces,
+  Part 3.1: Pedestrian area (Category P) lighting -- Performance and
+  design requirements* (third edition, supersedes 2005). The
+  ``SUBCATEGORIES`` table below is sourced verbatim from
+  Tables 3.3 -- 3.7 of that standard.
+* National Greenhouse Accounts factors (DCCEEW, latest published
+  year) for Victorian Scope 2 + 3 emissions intensity.
+
+The 2020 standard replaces the old P1--P12 category labels with five
+families of subcategories. The capstone notebook uses the pathway
+(PP) family for park paths; the other families are kept here so the
+engine can also size designs for roads, public spaces, and car
+parks without further work.
+
+================  =================================================
+Family            Use
+================  =================================================
+``PP1``--``PP5``  Pedestrian / cycle pathways (the capstone focus)
+``PR1``--``PR6``  Roads in local areas
+``PA1``--``PA3``  Public activity areas (excluding car parks)
+``PC1``--``PC3``  Outdoor off-road car parks
+``PE1``           Subways / connecting elements
+================  =================================================
 
 The defaults below are tuned for Melbourne, Victoria. Override the
-module-level constants from a calling notebook if you need a different
+module-level constants from a calling notebook for a different
 tariff / emissions factor / dusk-to-dawn hours.
 """
 
@@ -22,29 +42,80 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
-# ============================================================
-# AS/NZS 1158 P-Category Standards Lookup
-# ============================================================
+# ================================================================
+# AS/NZS 1158.3.1:2020 subcategory lookup
+# ================================================================
+#
+# Values are taken verbatim from the standard (Section 3 tables).
+# Note: ``uniformity`` here is the UE2 metric -- the maximum ratio of
+# the maximum to the average horizontal illuminance allowed for the
+# subcategory. *Lower is better*. This is the opposite of the
+# pre-2020 standard's E_min / E_avg uniformity ratio.
 
-P_CATEGORIES: dict[str, dict] = {
-    "P1":  {"name": "Major pedestrian activity",       "avg_lux": 14.0, "min_lux": 7.00, "uniformity": 0.50},
-    "P2":  {"name": "High-activity pedestrian",        "avg_lux": 10.0, "min_lux": 5.00, "uniformity": 0.50},
-    "P3":  {"name": "Moderate pedestrian",             "avg_lux":  7.0, "min_lux": 3.50, "uniformity": 0.50},
-    "P4":  {"name": "Moderate-low pedestrian",         "avg_lux":  5.0, "min_lux": 2.50, "uniformity": 0.50},
-    "P5":  {"name": "Low pedestrian",                  "avg_lux":  3.5, "min_lux": 1.75, "uniformity": 0.50},
-    "P6":  {"name": "Low-activity pedestrian",         "avg_lux":  3.5, "min_lux": 0.75, "uniformity": 0.21},
-    "P7":  {"name": "Minor pedestrian",                "avg_lux":  1.5, "min_lux": 0.75, "uniformity": 0.50},
-    "P8":  {"name": "Minor pedestrian (low risk)",     "avg_lux":  1.5, "min_lux": 0.38, "uniformity": 0.25},
-    "P9":  {"name": "Park paths (moderate use)",       "avg_lux":  2.0, "min_lux": 1.00, "uniformity": 0.50},
-    "P10": {"name": "Park paths (low use)",            "avg_lux":  1.0, "min_lux": 0.50, "uniformity": 0.50},
-    "P11": {"name": "Outdoor car parks (commercial)",  "avg_lux":  7.0, "min_lux": 1.75, "uniformity": 0.25},
-    "P12": {"name": "Outdoor car parks (residential)", "avg_lux":  3.5, "min_lux": 0.88, "uniformity": 0.25},
+SUBCATEGORIES: dict[str, dict] = {
+    # --- Pathways (PP) -- Table 3.4 -----------------------------
+    "PP1": {"name": "Pathway: high pedestrian/cycle activity",     "avg_lux": 10.00, "min_lux": 2.00, "uniformity": 5,  "table": "3.4"},
+    "PP2": {"name": "Pathway: medium-high activity",               "avg_lux":  7.00, "min_lux": 1.00, "uniformity": 5,  "table": "3.4"},
+    "PP3": {"name": "Pathway: medium activity",                    "avg_lux":  3.00, "min_lux": 0.50, "uniformity": 5,  "table": "3.4"},
+    "PP4": {"name": "Pathway: low activity",                       "avg_lux":  1.50, "min_lux": 0.25, "uniformity": 5,  "table": "3.4"},
+    "PP5": {"name": "Pathway: minimal activity",                   "avg_lux":  0.85, "min_lux": 0.14, "uniformity": 5,  "table": "3.4"},
+    # --- Local roads (PR) -- Table 3.3 --------------------------
+    "PR1": {"name": "Local road: high activity",                   "avg_lux":  7.00, "min_lux": 2.00, "uniformity": 8,  "table": "3.3"},
+    "PR2": {"name": "Local road: medium-high activity",            "avg_lux":  3.50, "min_lux": 0.70, "uniformity": 8,  "table": "3.3"},
+    "PR3": {"name": "Local road: medium activity",                 "avg_lux":  1.75, "min_lux": 0.30, "uniformity": 8,  "table": "3.3"},
+    "PR4": {"name": "Local road: medium-low activity",             "avg_lux":  1.30, "min_lux": 0.22, "uniformity": 8,  "table": "3.3"},
+    "PR5": {"name": "Local road: low activity",                    "avg_lux":  0.85, "min_lux": 0.14, "uniformity": 10, "table": "3.3"},
+    "PR6": {"name": "Local road: minimal (legacy retrofit)",       "avg_lux":  0.70, "min_lux": 0.07, "uniformity": 10, "table": "3.3"},
+    # --- Public activity (PA) -- Table 3.5 ----------------------
+    "PA1": {"name": "Public activity: high",                       "avg_lux": 21.00, "min_lux": 7.00, "uniformity": 8,  "table": "3.5"},
+    "PA2": {"name": "Public activity: medium",                     "avg_lux": 14.00, "min_lux": 4.00, "uniformity": 8,  "table": "3.5"},
+    "PA3": {"name": "Public activity: low",                        "avg_lux":  7.00, "min_lux": 2.00, "uniformity": 8,  "table": "3.5"},
+    # --- Outdoor car parks (PC) -- Table 3.7 --------------------
+    "PC1": {"name": "Outdoor car park: high",                      "avg_lux": 14.00, "min_lux": 3.00, "uniformity": 8,  "table": "3.7"},
+    "PC2": {"name": "Outdoor car park: medium",                    "avg_lux":  7.00, "min_lux": 1.50, "uniformity": 8,  "table": "3.7"},
+    "PC3": {"name": "Outdoor car park: low",                       "avg_lux":  3.50, "min_lux": 0.70, "uniformity": 8,  "table": "3.7"},
+    # --- Connecting elements (PE) -- Table 3.6 ------------------
+    "PE1": {"name": "Subway / underpass",                          "avg_lux": 35.00, "min_lux": 17.50, "uniformity": 8, "table": "3.6"},
+}
+
+# Per-family bounds for safety_adjustment arithmetic (subcategory numbers).
+_FAMILY_BOUNDS: dict[str, tuple[int, int]] = {
+    "PP": (1, 5),
+    "PR": (1, 6),
+    "PA": (1, 3),
+    "PC": (1, 3),
+    "PE": (1, 1),
 }
 
 
-# ============================================================
-# LED Technology Specs (typical bands)
-# ============================================================
+def _split_subcategory(subcat: str) -> tuple[str, int]:
+    """Split ``"PP3"`` -> ``("PP", 3)``."""
+    prefix = ""
+    for ch in subcat:
+        if ch.isdigit():
+            break
+        prefix += ch
+    return prefix, int(subcat[len(prefix):])
+
+
+def _apply_safety_adjustment(subcat: str, delta: int) -> str:
+    """
+    Shift a subcategory up or down inside its family.
+
+    ``delta < 0`` moves to a *brighter* subcategory (lower number).
+    Clamped to the family's valid range, so a -3 on ``PA3`` lands on
+    ``PA1`` and stays there.
+    """
+    if delta == 0:
+        return subcat
+    prefix, num = _split_subcategory(subcat)
+    lo, hi = _FAMILY_BOUNDS.get(prefix, (1, 1))
+    return f"{prefix}{max(lo, min(hi, num + delta))}"
+
+
+# ================================================================
+# LED bands (typical luminaires)
+# ================================================================
 
 LED_SPECS: dict[str, dict] = {
     "low":       {"wattage":  30, "lumens":  4500, "description":  "30W LED (park path bollard / low-mount)"},
@@ -54,22 +125,58 @@ LED_SPECS: dict[str, dict] = {
 }
 
 
-# ============================================================
-# Energy / Cost / Emissions constants (Melbourne defaults)
-# ============================================================
+# ================================================================
+# Melbourne defaults (override from the notebook for other cities)
+# ================================================================
 
-OPERATING_HOURS_PER_YEAR: int = 4200       # dusk-to-dawn average for Melbourne
+OPERATING_HOURS_PER_YEAR: int = 4200       # dusk-to-dawn average
 ELECTRICITY_RATE_PER_KWH: float = 0.20     # AUD, mid-range Victorian rate
-CARBON_FACTOR_VIC_SCOPE2_3: float = 1.08   # kg CO2-e / kWh (Scope 2: 0.96 + Scope 3: 0.12)
-RECOMMENDED_CCT: int = 3000                # Kelvin, warm white (Melbourne ecological guideline)
-LED_MAINTENANCE_FACTOR: float = 0.87       # typical for LED luminaires
+CARBON_FACTOR_VIC_SCOPE2_3: float = 1.08   # kg CO2-e / kWh (NGA, VIC, Scope 2 + 3)
+RECOMMENDED_CCT: int = 3000                # Kelvin, warm white
+LED_MAINTENANCE_FACTOR: float = 0.87
 LED_LIFESPAN_YEARS: int = 20
 LED_CRI: int = 70
 
 
-# ============================================================
+# ================================================================
+# Per-subcategory engineering tables
+# ================================================================
+
+# Spacing multiplier (s = multiplier * pole_height); AS/NZS 1158
+# guidance is 3-5x mounting height. Higher categories need closer
+# spacing for the tighter uniformity target.
+_SPACING_MULTIPLIER: dict[str, float] = {
+    "PP1": 3.0, "PP2": 3.5, "PP3": 4.0, "PP4": 4.5, "PP5": 5.0,
+    "PR1": 3.5, "PR2": 4.0, "PR3": 4.5, "PR4": 4.5, "PR5": 5.0, "PR6": 5.0,
+    "PA1": 3.0, "PA2": 3.5, "PA3": 4.0,
+    "PC1": 3.5, "PC2": 4.0, "PC3": 4.5,
+    "PE1": 3.0,
+}
+
+# LED band selection from subcategory.
+_LED_BAND: dict[str, str] = {
+    "PP1": "high",      "PP2": "high",     "PP3": "medium",   "PP4": "low",   "PP5": "low",
+    "PR1": "high",      "PR2": "medium",   "PR3": "medium",   "PR4": "low",   "PR5": "low",   "PR6": "low",
+    "PA1": "very_high", "PA2": "high",     "PA3": "medium",
+    "PC1": "high",      "PC2": "medium",   "PC3": "low",
+    "PE1": "very_high",
+}
+
+# Like-for-like HPS baseline wattage by LED band (for retrofit
+# comparison). Industry-typical replacements.
+_HPS_EQUIVALENT_W: dict[str, int] = {"low": 70, "medium": 175, "high": 250, "very_high": 400}
+
+# Installed cost per fixture (new install, includes pole + wiring),
+# in AUD. Coarse industry averages.
+_INSTALLED_COST_AUD: dict[str, float] = {"low": 3000, "medium": 4500, "high": 6000, "very_high": 8000}
+
+# Retrofit cost per fixture (luminaire swap on an existing pole), AUD.
+_RETROFIT_COST_AUD: dict[str, float] = {"low": 1000, "medium": 1500, "high": 2000, "very_high": 2800}
+
+
+# ================================================================
 # Design dataclass
-# ============================================================
+# ================================================================
 
 @dataclass
 class LightingDesign:
@@ -81,12 +188,12 @@ class LightingDesign:
     pathway_width_m: float = 3.0
     activity_level: str = "moderate"
 
-    # Category selection
-    p_category: str = ""
-    category_name: str = ""
+    # Subcategory selection
+    subcategory: str = ""
+    subcategory_name: str = ""
     required_avg_lux: float = 0.0
     required_min_lux: float = 0.0
-    required_uniformity: float = 0.0
+    required_uniformity: float = 0.0   # UE2 (max/avg ratio per 2020 standard)
 
     # Design specs
     pole_height_m: float = 0.0
@@ -121,12 +228,12 @@ class LightingDesign:
     pathway_geometry: dict = field(default_factory=dict)
 
     def summary_dict(self) -> dict:
-        """Return the key outputs as a dict (used as LLM grounding context)."""
+        """Return the headline outputs as a dict (LLM grounding context)."""
         d = {
             "location": self.location_name,
             "pathway_length_m": self.pathway_length_m,
-            "p_category": self.p_category,
-            "category_name": self.category_name,
+            "subcategory": self.subcategory,
+            "subcategory_name": self.subcategory_name,
             "required_avg_lux": self.required_avg_lux,
             "num_lights": self.num_lights,
             "spacing_m": self.spacing_m,
@@ -150,55 +257,85 @@ class LightingDesign:
         return d
 
 
-# ============================================================
-# Category / luminaire / geometry selection
-# ============================================================
+# ================================================================
+# Subcategory + engineering selection
+# ================================================================
 
-def select_p_category(activity_level: str, location_type: str = "park_path") -> str:
-    """Select an AS/NZS 1158 P-category from a location type and activity band."""
-    if location_type == "park_path":
-        mapping = {"low": "P10", "moderate": "P9", "high": "P3", "very_high": "P2"}
-    elif location_type == "shared_path":
-        mapping = {"low": "P5", "moderate": "P3", "high": "P2", "very_high": "P1"}
-    elif location_type == "public_space":
-        mapping = {"low": "P5", "moderate": "P3", "high": "P2", "very_high": "P1"}
-    elif location_type == "residential":
-        mapping = {"low": "P8", "moderate": "P6", "high": "P5", "very_high": "P4"}
-    else:
-        mapping = {"low": "P10", "moderate": "P9", "high": "P3", "very_high": "P2"}
-    return mapping.get(activity_level, "P9")
+def select_subcategory(location_type: str, activity_level: str) -> str:
+    """
+    Map a (location_type, activity_level) pair to a 2020-standard subcategory.
+
+    Args:
+        location_type: ``"park_path"``, ``"shared_path"``,
+            ``"public_space"``, ``"residential"``, or ``"car_park"``.
+        activity_level: ``"low"`` | ``"moderate"`` | ``"high"`` |
+            ``"very_high"``.
+
+    Returns:
+        An AS/NZS 1158.3.1:2020 subcategory string (e.g. ``"PP3"``).
+    """
+    if location_type in {"park_path", "shared_path"}:
+        # Pathway family.
+        return {
+            "very_high": "PP1",
+            "high":      "PP2",
+            "moderate":  "PP3",
+            "low":       "PP4",
+        }.get(activity_level, "PP4")
+
+    if location_type == "public_space":
+        return {
+            "very_high": "PA1",
+            "high":      "PA1",
+            "moderate":  "PA2",
+            "low":       "PA3",
+        }.get(activity_level, "PA3")
+
+    if location_type == "residential":
+        return {
+            "very_high": "PR1",
+            "high":      "PR2",
+            "moderate":  "PR3",
+            "low":       "PR5",
+        }.get(activity_level, "PR5")
+
+    if location_type == "car_park":
+        return {
+            "very_high": "PC1",
+            "high":      "PC1",
+            "moderate":  "PC2",
+            "low":       "PC3",
+        }.get(activity_level, "PC3")
+
+    # Sensible default for unknown types.
+    return "PP4"
 
 
-def select_led_spec(p_category: str) -> str:
-    """Pick an LED band based on the P-category."""
-    if p_category in {"P1", "P2", "P11"}:
-        return "high"
-    if p_category in {"P3", "P4", "P5"}:
-        return "medium"
-    return "low"
+def select_led_spec(subcategory: str) -> str:
+    """Pick an LED band band based on the subcategory."""
+    return _LED_BAND.get(subcategory, "low")
 
 
-def calculate_spacing(pole_height: float, p_category: str) -> float:
-    """Spacing = pole_height x category multiplier (AS/NZS 1158 guidance, 3-5x)."""
-    multipliers = {
-        "P1": 3.0, "P2": 3.5, "P3": 3.5, "P4": 4.0, "P5": 4.0, "P6": 4.5,
-        "P7": 5.0, "P8": 5.0, "P9": 4.0, "P10": 5.0, "P11": 4.0, "P12": 4.5,
-    }
-    return round(pole_height * multipliers.get(p_category, 4.0), 1)
+def calculate_spacing(pole_height: float, subcategory: str) -> float:
+    """``spacing = pole_height * subcategory_multiplier`` (AS/NZS 1158 guidance, 3-5x)."""
+    mult = _SPACING_MULTIPLIER.get(subcategory, 4.0)
+    return round(pole_height * mult, 1)
 
 
-def select_pole_height(p_category: str, pathway_width: float) -> float:
-    """Pole height from category + pathway width."""
-    if p_category in {"P1", "P2"}:
+def select_pole_height(subcategory: str, pathway_width: float) -> float:
+    """Pole height from subcategory + pathway width."""
+    if subcategory in {"PP1", "PA1", "PE1"}:
         return 6.0 if pathway_width >= 3.0 else 5.0
-    if p_category in {"P3", "P4", "P5"}:
-        return 5.0 if pathway_width >= 3.0 else 4.0
+    if subcategory in {"PP2", "PA2", "PR1", "PR2", "PC1"}:
+        return 5.0 if pathway_width >= 3.0 else 4.5
+    if subcategory in {"PP3", "PA3", "PR3", "PC2"}:
+        return 4.5 if pathway_width >= 3.0 else 4.0
     return 4.0 if pathway_width >= 2.0 else 3.5
 
 
-# ============================================================
+# ================================================================
 # Main design calculation
-# ============================================================
+# ================================================================
 
 def design_lighting(
     location_name: str,
@@ -216,19 +353,20 @@ def design_lighting(
     """
     Run the full lighting design for a pathway.
 
-    Steps
-    -----
-    1. Select P-category (with optional safety adjustment).
-    2. Select pole height + spacing.
-    3. Count lights along the path (fence-post: lights at 0, s, 2s, ..., L).
-    4. Select an LED band and pull wattage / lumens.
-    5. Compute annual energy, cost, and CO2-e emissions.
-    6. Compute capital + maintenance costs.
-    7. Compare against a like-for-like HPS baseline.
-    8. Compute simple retrofit payback.
+    Steps:
+
+    1. Map sensor count to activity band if ``avg_pedestrian_count`` provided.
+    2. Pick a subcategory (with optional safety adjustment).
+    3. Pole height + spacing + light count (fence-post layout).
+    4. LED band + wattage / lumens.
+    5. Annual energy, cost, CO2-e emissions.
+    6. Capital + maintenance costs.
+    7. Like-for-like HPS baseline comparison.
+    8. Simple retrofit payback.
     9. Optional: geometry-aware light placement on the actual polyline.
     10. Optional: budget cap analysis with a reduced-spec alternative.
     """
+    # 1. Sensor count -> activity band.
     if avg_pedestrian_count is not None:
         if avg_pedestrian_count < 50:
             activity_level = "low"
@@ -246,79 +384,71 @@ def design_lighting(
         activity_level=activity_level,
     )
 
-    # 1. P-category
-    design.p_category = select_p_category(activity_level, location_type)
+    # 2. Subcategory.
+    design.subcategory = select_subcategory(location_type, activity_level)
     if safety_adjustment != 0:
-        p_num = int(design.p_category.replace("P", ""))
-        adjusted = max(1, min(12, p_num + safety_adjustment))
-        design.p_category = f"P{adjusted}"
-    cat = P_CATEGORIES[design.p_category]
-    design.category_name = cat["name"]
+        design.subcategory = _apply_safety_adjustment(design.subcategory, safety_adjustment)
+    cat = SUBCATEGORIES[design.subcategory]
+    design.subcategory_name = cat["name"]
     design.required_avg_lux = cat["avg_lux"]
     design.required_min_lux = cat["min_lux"]
     design.required_uniformity = cat["uniformity"]
 
-    # 2. Pole height + spacing
-    design.pole_height_m = select_pole_height(design.p_category, pathway_width_m)
-    design.spacing_m = calculate_spacing(design.pole_height_m, design.p_category)
+    # 3. Pole height + spacing.
+    design.pole_height_m = select_pole_height(design.subcategory, pathway_width_m)
+    design.spacing_m = calculate_spacing(design.pole_height_m, design.subcategory)
 
-    # 3. Number of lights (fence-post)
+    # Number of lights (fence-post).
     design.num_lights = max(2, math.floor(pathway_length_m / design.spacing_m) + 1)
 
-    # 4. LED selection
-    design.led_spec = select_led_spec(design.p_category)
+    # 4. LED selection.
+    design.led_spec = select_led_spec(design.subcategory)
     spec = LED_SPECS[design.led_spec]
     design.led_wattage = spec["wattage"]
     design.led_lumens = spec["lumens"]
 
-    # 5. Energy / cost / CO2 (LED)
+    # 5. Energy / cost / CO2 (LED).
     design.total_system_wattage = design.num_lights * design.led_wattage
     design.annual_energy_kwh = design.total_system_wattage * OPERATING_HOURS_PER_YEAR / 1000.0
     design.annual_energy_cost_aud = design.annual_energy_kwh * ELECTRICITY_RATE_PER_KWH
     design.annual_co2_kg = design.annual_energy_kwh * CARBON_FACTOR_VIC_SCOPE2_3
 
-    # 6. Capital + maintenance
-    cost_per_light_installed = {"low": 3000, "medium": 4500, "high": 6000, "very_high": 8000}
-    design.capital_cost_per_light_aud = cost_per_light_installed[design.led_spec]
+    # 6. Capital + maintenance.
+    design.capital_cost_per_light_aud = _INSTALLED_COST_AUD[design.led_spec]
     design.total_capital_cost_aud = design.num_lights * design.capital_cost_per_light_aud
     design.annual_maintenance_cost_aud = design.num_lights * 15  # ~$15/light/yr for LED
 
-    # 7. HPS baseline
-    hps_wattage_map = {"low": 70, "medium": 175, "high": 250, "very_high": 400}
-    design.hps_equivalent_wattage = hps_wattage_map[design.led_spec]
+    # 7. HPS baseline.
+    design.hps_equivalent_wattage = _HPS_EQUIVALENT_W[design.led_spec]
     hps_total_w = design.num_lights * design.hps_equivalent_wattage
     design.hps_annual_energy_kwh = hps_total_w * OPERATING_HOURS_PER_YEAR / 1000.0
     design.hps_annual_cost_aud = design.hps_annual_energy_kwh * ELECTRICITY_RATE_PER_KWH
-
     if design.hps_annual_energy_kwh > 0:
         design.energy_saving_percent = (
             (design.hps_annual_energy_kwh - design.annual_energy_kwh)
-            / design.hps_annual_energy_kwh
-            * 100
+            / design.hps_annual_energy_kwh * 100
         )
     design.co2_saving_kg = (
         (design.hps_annual_energy_kwh - design.annual_energy_kwh) * CARBON_FACTOR_VIC_SCOPE2_3
     )
 
-    # 8. Retrofit payback (luminaire swap, poles reused)
-    retrofit_cost_per_light = {"low": 1000, "medium": 1500, "high": 2000, "very_high": 2800}
-    retrofit_total = design.num_lights * retrofit_cost_per_light[design.led_spec]
+    # 8. Retrofit payback (luminaire swap, poles reused).
+    retrofit_total = design.num_lights * _RETROFIT_COST_AUD[design.led_spec]
     annual_saving = (
         (design.hps_annual_cost_aud - design.annual_energy_cost_aud)
-        + design.num_lights * 60  # +$60/light/yr HPS maintenance saving (industry avg)
+        + design.num_lights * 60  # +$60/light/yr avoided HPS maintenance
     )
     if annual_saving > 0:
         design.payback_years = retrofit_total / annual_saving
 
     design.safety_adjustment_applied = safety_adjustment
 
-    # 9. Geometry-aware placement (optional)
+    # 9. Geometry-aware placement (optional).
     if pathway_geometry and pathway_geometry.get("coordinates"):
         try:
             from smart_street_lighting.osm.geometry import place_lights_on_polyline
-
             coords_lonlat = pathway_geometry["coordinates"]
-            coords = [(c[1], c[0]) for c in coords_lonlat]  # GeoJSON is [lon, lat]
+            coords = [(c[1], c[0]) for c in coords_lonlat]
             design.light_positions = place_lights_on_polyline(
                 coords,
                 design.spacing_m,
@@ -327,7 +457,6 @@ def design_lighting(
             )
             design.pathway_geometry = pathway_geometry
             if design.light_positions:
-                # Re-cost using the actual placed light count
                 design.num_lights = len(design.light_positions)
                 design.total_system_wattage = design.num_lights * design.led_wattage
                 design.annual_energy_kwh = (
@@ -347,16 +476,13 @@ def design_lighting(
                 if design.hps_annual_energy_kwh > 0:
                     design.energy_saving_percent = (
                         (design.hps_annual_energy_kwh - design.annual_energy_kwh)
-                        / design.hps_annual_energy_kwh
-                        * 100
+                        / design.hps_annual_energy_kwh * 100
                     )
                 design.co2_saving_kg = (
                     (design.hps_annual_energy_kwh - design.annual_energy_kwh)
                     * CARBON_FACTOR_VIC_SCOPE2_3
                 )
-                retrofit_total = (
-                    design.num_lights * retrofit_cost_per_light[design.led_spec]
-                )
+                retrofit_total = design.num_lights * _RETROFIT_COST_AUD[design.led_spec]
                 annual_saving = (
                     (design.hps_annual_cost_aud - design.annual_energy_cost_aud)
                     + design.num_lights * 60
@@ -366,13 +492,12 @@ def design_lighting(
         except Exception as e:
             print(f"Geometry placement failed, using linear calculation: {e}")
 
-    # 10. Budget cap analysis
+    # 10. Budget cap analysis.
     if budget_cap is not None:
         total_annual = (
             design.annual_energy_cost_aud + design.annual_maintenance_cost_aud
         )
         within_budget = total_annual <= budget_cap
-
         budget_alt = None
         compliance_notes: list[str] = []
         if not within_budget:
@@ -388,12 +513,10 @@ def design_lighting(
                 else design.led_spec
             )
             alt_spec = LED_SPECS[alt_spec_key]
-
             alt_energy = alt_num_lights * alt_spec["wattage"] * OPERATING_HOURS_PER_YEAR / 1000.0
             alt_cost = alt_energy * ELECTRICITY_RATE_PER_KWH
             alt_maint = alt_num_lights * 15
             alt_total = alt_cost + alt_maint
-
             budget_alt = {
                 "num_lights": alt_num_lights,
                 "spacing_m": round(alt_spacing, 1),
@@ -405,7 +528,6 @@ def design_lighting(
                 f"Budget alternative uses {alt_spacing:.1f}m spacing (1.3x standard), "
                 "which may reduce uniformity below AS/NZS 1158 requirements."
             )
-
         design.budget_analysis = {
             "budget_cap": budget_cap,
             "within_budget": within_budget,
@@ -417,9 +539,9 @@ def design_lighting(
     return design
 
 
-# ============================================================
+# ================================================================
 # Photometric verification (lumen method)
-# ============================================================
+# ================================================================
 
 def verify_design(
     design: LightingDesign,
@@ -427,28 +549,18 @@ def verify_design(
     maintenance_factor: float = LED_MAINTENANCE_FACTOR,
 ) -> dict:
     """
-    Verify a design against AS/NZS 1158 illuminance requirements.
+    Verify a design against AS/NZS 1158 illuminance with the lumen
+    method:
 
-    Uses the standard lumen-method estimate of average maintained
-    illuminance::
+    .. math::
 
-        E_avg = (N * F * CU * MF) / A
+        E_{\\text{avg}} = \\frac{N \\cdot F \\cdot \\text{CU} \\cdot \\text{MF}}{A}
 
-    where:
-
-    * ``N``   -- number of luminaires
-    * ``F``   -- lumens per luminaire
-    * ``CU``  -- coefficient of utilisation (fraction of luminaire flux
-      that reaches the task plane; 0.40-0.55 is typical for outdoor
-      post-top luminaires)
-    * ``MF``  -- maintenance factor (lumen depreciation, dirt, etc.;
-      ~0.87 for sealed LEDs in clean outdoor environments)
-    * ``A``   -- task area in m^2 (pathway length x width)
-
-    Returns a dict with the predicted illuminance, the target
-    illuminance from the P-category table, and a pass/fail verdict.
-    Uniformity is approximated from category-typical layouts because a
-    point-by-point grid solve is out of scope for the lumen method.
+    Returns a dict with the predicted illuminance, the target from the
+    subcategory table, and a pass/fail verdict. Uniformity is reported
+    using the 2020 UE2 definition (``max/avg``), which the lumen
+    method cannot solve directly -- a strict point-by-point grid
+    solver is out of scope.
     """
     if design.pathway_length_m <= 0 or design.pathway_width_m <= 0:
         raise ValueError("Pathway dimensions must be positive.")
@@ -458,16 +570,13 @@ def verify_design(
     e_avg_predicted = (
         total_flux * coefficient_of_utilisation * maintenance_factor / area_m2
     )
-
-    # Approximate min illuminance from the category's typical uniformity
-    e_min_predicted = e_avg_predicted * design.required_uniformity
-
+    # Approximation: if uniformity (max/avg) is U, then min/avg ~ 1/U^2 worst-case.
+    # Use 1/U as a conservative E_min estimate for the lumen method check.
+    e_min_predicted = e_avg_predicted / max(1.0, design.required_uniformity)
     pass_avg = e_avg_predicted >= design.required_avg_lux
     pass_min = e_min_predicted >= design.required_min_lux
-    overall_pass = pass_avg and pass_min
-
     return {
-        "p_category": design.p_category,
+        "subcategory": design.subcategory,
         "coefficient_of_utilisation": coefficient_of_utilisation,
         "maintenance_factor": maintenance_factor,
         "task_area_m2": round(area_m2, 1),
@@ -476,17 +585,17 @@ def verify_design(
         "predicted_min_lux": round(e_min_predicted, 2),
         "required_avg_lux": design.required_avg_lux,
         "required_min_lux": design.required_min_lux,
-        "required_uniformity": design.required_uniformity,
+        "required_uniformity_UE2_max_avg": design.required_uniformity,
         "pass_avg": pass_avg,
         "pass_min": pass_min,
-        "pass": overall_pass,
+        "pass": pass_avg and pass_min,
         "headroom_avg_lux": round(e_avg_predicted - design.required_avg_lux, 2),
     }
 
 
-# ============================================================
+# ================================================================
 # Off-grid solar PV sizing
-# ============================================================
+# ================================================================
 
 def size_solar_alternative(
     design: LightingDesign,
@@ -503,48 +612,33 @@ def size_solar_alternative(
     """
     Size an off-grid solar PV alternative for the same luminaire set.
 
-    Pole-mounted solar fixtures need a PV panel, battery storage, and a
-    charge controller per light. This function returns a per-light and
-    a system-level sizing using the standard worked equations below.
+    Per-light daily energy:
 
-    Per-light daily energy::
+    .. math::
 
-        E_day_Wh = wattage_W * nightly_run_hours
+        E_{\\text{day}} = W \\cdot h_{\\text{night}}
 
-    Panel size (Wp) needed for that daily load given local sun and
-    derating::
+    Panel size (Wp):
 
-        P_panel_Wp = E_day_Wh / (peak_sun_hours * panel_derating)
+    .. math::
 
-    Battery capacity (Wh) for ``autonomy_days`` of overcast weather,
-    derated for usable depth-of-discharge::
+        P_{\\text{panel}} = \\frac{E_{\\text{day}}}{h_{\\text{sun}} \\cdot \\eta_{\\text{derate}}}
 
-        E_batt_Wh = (E_day_Wh * autonomy_days) / battery_depth_of_discharge
-        C_batt_Ah = E_batt_Wh / system_voltage_v
+    Battery capacity (Wh):
 
-    The defaults match Melbourne winter average peak sun hours
-    (~3.4-3.8) and LiFePO4 battery chemistry.
+    .. math::
+
+        E_{\\text{batt}} = \\frac{E_{\\text{day}} \\cdot d_{\\text{auto}}}{\\text{DoD}}
     """
     if design.num_lights <= 0:
         raise ValueError("Design must have at least one luminaire to size solar.")
-
     per_light_daily_wh = design.led_wattage * nightly_run_hours
-
     panel_wp_per_light = per_light_daily_wh / (peak_sun_hours * panel_derating)
     battery_wh_per_light = (per_light_daily_wh * autonomy_days) / battery_depth_of_discharge
     battery_ah_per_light = battery_wh_per_light / system_voltage_v
-
     panel_cost_per_light = panel_wp_per_light * panel_cost_per_wp_aud
     battery_cost_per_light = (battery_wh_per_light / 1000.0) * battery_cost_per_kwh_aud
     capex_per_light = panel_cost_per_light + battery_cost_per_light + extra_per_light_aud
-
-    total = {
-        "num_lights": design.num_lights,
-        "total_panel_kwp": round(panel_wp_per_light * design.num_lights / 1000.0, 2),
-        "total_battery_kwh": round(battery_wh_per_light * design.num_lights / 1000.0, 2),
-        "total_capex_aud": round(capex_per_light * design.num_lights, 2),
-    }
-
     return {
         "assumptions": {
             "nightly_run_hours": nightly_run_hours,
@@ -563,15 +657,20 @@ def size_solar_alternative(
             "battery_cost_aud": round(battery_cost_per_light, 2),
             "capex_aud": round(capex_per_light, 2),
         },
-        "system_total": total,
+        "system_total": {
+            "num_lights": design.num_lights,
+            "total_panel_kwp": round(panel_wp_per_light * design.num_lights / 1000.0, 2),
+            "total_battery_kwh": round(battery_wh_per_light * design.num_lights / 1000.0, 2),
+            "total_capex_aud": round(capex_per_light * design.num_lights, 2),
+        },
         "annual_grid_kwh_avoided": round(design.annual_energy_kwh, 1),
         "annual_co2_avoided_kg": round(design.annual_co2_kg, 1),
     }
 
 
-# ============================================================
-# Pretty-printer (used by the notebook for inline narrative)
-# ============================================================
+# ================================================================
+# Pretty-printer
+# ================================================================
 
 def format_design_report(design: LightingDesign) -> str:
     """Format a human-readable design report from a LightingDesign."""
@@ -582,11 +681,11 @@ Location: {design.location_name}
 Pathway: {design.pathway_length_m}m long x {design.pathway_width_m}m wide
 Activity Level: {design.activity_level}
 
-CATEGORY SELECTION
-  AS/NZS 1158 Category: {design.p_category} - {design.category_name}
-  Required average illuminance: {design.required_avg_lux} lux
-  Required minimum illuminance: {design.required_min_lux} lux
-  Required uniformity (Emin/Eavg): {design.required_uniformity}
+AS/NZS 1158.3.1:2020 SUBCATEGORY
+  Subcategory: {design.subcategory} - {design.subcategory_name}
+  Required average illuminance:  {design.required_avg_lux} lux
+  Required minimum illuminance:  {design.required_min_lux} lux
+  Required uniformity (UE2, max/avg): {design.required_uniformity}
 
 DESIGN SPECIFICATIONS
   Number of lights: {design.num_lights}

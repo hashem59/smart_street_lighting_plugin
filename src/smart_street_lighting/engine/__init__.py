@@ -1,15 +1,18 @@
 """
-Deterministic AS/NZS 1158 lighting calculation engine.
+Deterministic AS/NZS 1158.3.1:2020 lighting calculation engine.
 
-This is the project's intellectual property. The LLM (notebook side)
-explains and justifies; the numbers come from here.
+This module is the project's intellectual property. The LLM
+(notebook side) explains and justifies; the numbers come from here.
 
 Public surface
 --------------
-* :data:`P_CATEGORIES`            -- AS/NZS 1158 P-category lookup table.
+* :data:`SUBCATEGORIES`           -- AS/NZS 1158.3.1:2020 lookup
+  (PP1-PP5 pathways, PR1-PR6 roads, PA1-PA3 public activity,
+  PC1-PC3 car parks, PE1 connecting elements).
 * :data:`LED_SPECS`               -- Typical LED luminaire bands.
 * :class:`LightingDesign`         -- Dataclass holding a full design.
-* :func:`select_p_category`       -- Choose a P-category from activity.
+* :func:`select_subcategory`      -- ``(location_type, activity_level)``
+  -> subcategory string.
 * :func:`design_lighting`         -- End-to-end design calculation.
 * :func:`verify_design`           -- Photometric (lumen-method) check.
 * :func:`size_solar_alternative`  -- Off-grid solar PV sizing.
@@ -17,7 +20,7 @@ Public surface
 """
 
 from smart_street_lighting.engine.calc import (
-    P_CATEGORIES,
+    SUBCATEGORIES,
     LED_SPECS,
     OPERATING_HOURS_PER_YEAR,
     ELECTRICITY_RATE_PER_KWH,
@@ -27,7 +30,7 @@ from smart_street_lighting.engine.calc import (
     LED_LIFESPAN_YEARS,
     LED_CRI,
     LightingDesign,
-    select_p_category,
+    select_subcategory,
     select_led_spec,
     select_pole_height,
     calculate_spacing,
@@ -38,7 +41,7 @@ from smart_street_lighting.engine.calc import (
 )
 
 __all__ = [
-    "P_CATEGORIES",
+    "SUBCATEGORIES",
     "LED_SPECS",
     "OPERATING_HOURS_PER_YEAR",
     "ELECTRICITY_RATE_PER_KWH",
@@ -48,7 +51,7 @@ __all__ = [
     "LED_LIFESPAN_YEARS",
     "LED_CRI",
     "LightingDesign",
-    "select_p_category",
+    "select_subcategory",
     "select_led_spec",
     "select_pole_height",
     "calculate_spacing",

@@ -21,14 +21,14 @@ notebook can import only what it needs:
 The notebook is the deliverable; this library is the plumbing.
 """
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 from smart_street_lighting.engine import (
-    P_CATEGORIES,
+    SUBCATEGORIES,
     LED_SPECS,
     LightingDesign,
     design_lighting,
-    select_p_category,
+    select_subcategory,
     verify_design,
     size_solar_alternative,
     format_design_report,
@@ -51,11 +51,11 @@ from smart_street_lighting.osm.geometry import (
 __all__ = [
     "__version__",
     # engine
-    "P_CATEGORIES",
+    "SUBCATEGORIES",
     "LED_SPECS",
     "LightingDesign",
     "design_lighting",
-    "select_p_category",
+    "select_subcategory",
     "verify_design",
     "size_solar_alternative",
     "format_design_report",

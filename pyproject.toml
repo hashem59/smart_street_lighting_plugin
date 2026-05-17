@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smart-street-lighting-plugin"
-version = "0.1.2"
+version = "0.1.3"
 description = "Plumbing for an AS/NZS 1158-compliant smart street lighting design system: deterministic calculation engine, OSM resolver, geometry helpers, and RAG infrastructure backed by LM Studio."
 readme = "README.md"
 requires-python = ">=3.10"
