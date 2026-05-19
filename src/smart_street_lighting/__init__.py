@@ -21,8 +21,12 @@ notebook can import only what it needs:
 The notebook is the deliverable; this library is the plumbing.
 """
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 
+from smart_street_lighting._defaults import (
+    default_openrouter_key,
+    bundled_dotenv,
+)
 from smart_street_lighting.engine import (
     SUBCATEGORIES,
     LED_SPECS,
@@ -51,6 +55,9 @@ from smart_street_lighting.rag import bootstrap_knowledge_base
 
 __all__ = [
     "__version__",
+    # defaults
+    "default_openrouter_key",
+    "bundled_dotenv",
     # engine
     "SUBCATEGORIES",
     "LED_SPECS",
