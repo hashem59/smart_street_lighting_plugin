@@ -21,7 +21,7 @@ notebook can import only what it needs:
 The notebook is the deliverable; this library is the plumbing.
 """
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 from smart_street_lighting.engine import (
     SUBCATEGORIES,
@@ -47,6 +47,7 @@ from smart_street_lighting.osm.geometry import (
     find_entry_points,
     place_lights_on_polyline,
 )
+from smart_street_lighting.rag import bootstrap_knowledge_base
 
 __all__ = [
     "__version__",
@@ -71,4 +72,6 @@ __all__ = [
     "find_intersections",
     "find_entry_points",
     "place_lights_on_polyline",
+    # rag
+    "bootstrap_knowledge_base",
 ]

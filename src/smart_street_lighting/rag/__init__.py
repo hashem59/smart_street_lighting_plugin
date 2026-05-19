@@ -22,6 +22,7 @@ from smart_street_lighting.rag.pipeline import (
     query_with_context,
     DEFAULT_SOURCE_RULES,
 )
+from smart_street_lighting.rag.bootstrap import bootstrap_knowledge_base
 
 __all__ = [
     "create_chroma_client",
@@ -30,4 +31,5 @@ __all__ = [
     "create_query_engine",
     "query_with_context",
     "DEFAULT_SOURCE_RULES",
+    "bootstrap_knowledge_base",
 ]
